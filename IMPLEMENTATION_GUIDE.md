@@ -173,7 +173,7 @@ scp -i your-key.pem -r ./bmi-health-tracker ubuntu@YOUR_EC2_PUBLIC_IP:/home/ubun
 
 # Then SSH and navigate:
 ssh -i your-key.pem ubuntu@YOUR_EC2_PUBLIC_IP
-cd /home/ubuntu/bmi-health-tracker
+cd /home/ubuntu/single-server-3tier-webapp
 ```
 
 **Option C: Upload as ZIP**
@@ -191,7 +191,7 @@ cd bmi-health-tracker
 ### 4.2 Setup Backend
 
 ```bash
-cd /home/ubuntu/bmi-health-tracker/backend
+cd /home/ubuntu/single-server-3tier-webapp/backend
 
 # Create environment file from example
 cp .env.example .env
@@ -245,7 +245,7 @@ npm start
 ### 4.3 Setup Frontend
 
 ```bash
-cd /home/ubuntu/bmi-health-tracker/frontend
+cd /home/ubuntu/single-server-3tier-webapp/frontend
 
 # Install dependencies
 npm install
@@ -286,7 +286,7 @@ npm install -g pm2
 ### 5.2 Start Backend with PM2
 
 ```bash
-cd /home/ubuntu/bmi-health-tracker/backend
+cd /home/ubuntu/single-server-3tier-webapp/backend
 
 # Start the backend server
 pm2 start src/server.js --name bmi-backend
@@ -659,7 +659,7 @@ sudo tail -f /var/log/postgresql/postgresql-*-main.log
 
 ```bash
 # Navigate to project directory
-cd /home/ubuntu/bmi-health-tracker
+cd /home/ubuntu/single-server-3tier-webapp
 
 # Pull latest changes (if using Git)
 git pull origin main
@@ -701,7 +701,7 @@ sudo systemctl status postgresql
 psql -U bmi_user -d bmidb -h localhost
 
 # Check backend .env file has correct DATABASE_URL
-cat /home/ubuntu/bmi-health-tracker/backend/.env
+cat /home/ubuntu/single-server-3tier-webapp/backend/.env
 ```
 
 **Issue: Nginx 502 Bad Gateway**
@@ -753,7 +753,7 @@ sudo tail -50 /var/log/nginx/bmi-error.log
 psql -U bmi_user -d bmidb -h localhost -c "\d measurements" | grep measurement_date
 
 # If column is missing, run migration 002:
-cd /home/ubuntu/bmi-health-tracker/backend
+cd /home/ubuntu/single-server-3tier-webapp/backend
 psql -U bmi_user -d bmidb -h localhost -f migrations/002_add_measurement_date.sql
 
 # Restart backend
@@ -767,7 +767,7 @@ ls -la /var/www/bmi-health-tracker/
 
 # Check for JavaScript errors in browser console (F12)
 # Rebuild and redeploy if needed:
-cd /home/ubuntu/bmi-health-tracker/frontend
+cd /home/ubuntu/single-server-3tier-webapp/frontend
 npm run build
 sudo cp -r dist/* /var/www/bmi-health-tracker/
 sudo chown -R www-data:www-data /var/www/bmi-health-tracker
@@ -776,7 +776,7 @@ sudo chown -R www-data:www-data /var/www/bmi-health-tracker
 **Problem: Backend not accepting measurementDate field**
 ```bash
 # Check backend code is current
-cd /home/ubuntu/bmi-health-tracker/backend
+cd /home/ubuntu/single-server-3tier-webapp/backend
 grep -r "measurementDate" src/routes.js
 
 # If not found, ensure you have the latest code
@@ -924,7 +924,7 @@ Ensure your PostgreSQL user has a strong password (at least 16 characters, mixed
 
 Never commit `.env` file to Git. Keep it secure with proper permissions:
 ```bash
-chmod 600 /home/ubuntu/bmi-health-tracker/backend/.env
+chmod 600 /home/ubuntu/single-server-3tier-webapp/backend/.env
 ```
 
 ### 12.5 Regular Backups
@@ -955,6 +955,560 @@ aws ec2 stop-instances --instance-ids i-1234567890abcdef0
 ```
 
 Note: You still pay for EBS storage when stopped.
+
+---
+
+## Part 14: Application Updates & Maintenance
+
+After your application is successfully running, you'll need to update it when new features are added or bugs are fixed. This section covers how to safely update your application with minimal downtime.
+
+### 14.1 Pre-Update Checklist
+
+Before performing any update:
+
+```bash
+# 1. Create database backup
+sudo -u postgres pg_dump -Fc bmi_tracker > /var/backups/postgresql/bmi_tracker_$(date +%Y%m%d_%H%M%S).dump
+
+# 2. Check current application status
+pm2 status
+sudo systemctl status nginx
+sudo systemctl status postgresql
+
+# 3. Note current version/commit
+cd /home/ubuntu/single-server-3tier-webapp
+git log -1 --oneline
+```
+
+### 14.2 Update Backend (Node.js API)
+
+#### Method 1: Git Pull (Recommended for Git-based deployments)
+
+```bash
+# Navigate to project directory
+cd /home/ubuntu/single-server-3tier-webapp/backend
+
+# Fetch latest changes
+git fetch origin main
+
+# Check what will change
+git log HEAD..origin/main --oneline
+
+# Pull latest code
+git pull origin main
+
+# Install new dependencies (if package.json changed)
+npm install
+
+# Run new database migrations (if any)
+# Check migrations folder first
+ls -la migrations/
+
+# If new migrations exist, run them
+node -e "
+const pool = require('./src/db');
+const fs = require('fs');
+const path = require('path');
+
+async function runMigrations() {
+  const client = await pool.connect();
+  try {
+    const migrations = fs.readdirSync('./migrations').sort();
+    for (const file of migrations) {
+      console.log(\`Running migration: \${file}\`);
+      const sql = fs.readFileSync(path.join('./migrations', file), 'utf8');
+      await client.query(sql);
+      console.log(\`✓ Completed: \${file}\`);
+    }
+  } finally {
+    client.release();
+  }
+}
+runMigrations();
+"
+
+# Restart backend with PM2 (zero-downtime reload)
+pm2 reload bmi-backend
+
+# Verify backend is running
+pm2 status
+pm2 logs bmi-backend --lines 50
+
+# Test API endpoint
+curl http://localhost:3000/health
+```
+
+#### Method 2: Manual File Upload
+
+```bash
+# If you uploaded files manually (via SCP/SFTP)
+
+# Navigate to backend directory
+cd /home/ubuntu/single-server-3tier-webapp/backend
+
+# Backup current code
+cp -r /home/ubuntu/single-server-3tier-webapp/backend /home/ubuntu/single-server-3tier-webapp/backend.backup.$(date +%Y%m%d_%H%M%S)
+
+# Upload new files (from your local machine)
+# scp -i your-key.pem -r ./backend/* ubuntu@YOUR_EC2_IP:/home/ubuntu/single-server-3tier-webapp/backend/
+
+# On the server, install dependencies
+npm install
+
+# Run migrations (if needed)
+# Check for new migration files in migrations/ folder
+
+# Restart backend
+pm2 reload bmi-backend
+
+# Monitor logs
+pm2 logs bmi-backend
+```
+
+### 14.3 Update Frontend (React App)
+
+```bash
+# Navigate to frontend directory
+cd /home/ubuntu/single-server-3tier-webapp/frontend
+
+# Pull latest code (if using Git)
+git pull origin main
+
+# Install new dependencies
+npm install
+
+# Build production bundle
+npm run build
+
+# The build process creates optimized files in dist/ folder
+
+# Backup current frontend
+sudo cp -r /var/www/bmi-tracker /var/www/bmi-tracker.backup.$(date +%Y%m%d_%H%M%S)
+
+# Copy new build to Nginx directory
+sudo rm -rf /var/www/bmi-tracker/*
+sudo cp -r dist/* /var/www/bmi-tracker/
+
+# Set proper permissions
+sudo chown -R www-data:www-data /var/www/bmi-tracker
+sudo chmod -R 755 /var/www/bmi-tracker
+
+# Clear browser cache by updating Nginx headers (optional)
+sudo nano /etc/nginx/sites-available/bmi-health-tracker
+
+# Add cache busting for new deployments:
+# location / {
+#     try_files $uri $uri/ /index.html;
+#     add_header Cache-Control "no-cache, must-revalidate";
+# }
+
+# Reload Nginx (no downtime)
+sudo nginx -t
+sudo systemctl reload nginx
+
+# Verify frontend
+curl http://localhost/
+```
+
+### 14.4 Update Database Schema (New Migrations)
+
+```bash
+# Navigate to backend directory
+cd /home/ubuntu/single-server-3tier-webapp/backend
+
+# List existing migrations
+ls -la migrations/
+
+# If new migration files exist (e.g., 003_add_new_feature.sql)
+# Run them manually:
+
+sudo -u postgres psql -d bmi_tracker -f migrations/003_add_new_feature.sql
+
+# Or create a migration runner script
+cat > run_migrations.sh << 'EOF'
+#!/bin/bash
+for migration in migrations/*.sql; do
+    echo "Running $migration..."
+    sudo -u postgres psql -d bmi_tracker -f "$migration"
+    if [ $? -eq 0 ]; then
+        echo "✓ $migration completed"
+    else
+        echo "✗ $migration failed"
+        exit 1
+    fi
+done
+EOF
+
+chmod +x run_migrations.sh
+./run_migrations.sh
+
+# Verify schema changes
+sudo -u postgres psql -d bmi_tracker
+
+-- Check tables
+\dt
+
+-- Check specific table structure
+\d measurements
+
+-- Exit
+\q
+```
+
+### 14.5 Zero-Downtime Deployment Strategy
+
+For production environments where downtime is unacceptable:
+
+```bash
+# 1. Create a deployment script
+cat > /home/ubuntu/deploy.sh << 'EOF'
+#!/bin/bash
+
+set -e  # Exit on error
+
+echo "========================================="
+echo "BMI Tracker Deployment Script"
+echo "Started: $(date)"
+echo "========================================="
+
+# Configuration
+PROJECT_DIR="/home/ubuntu/single-server-3tier-webapp"
+BACKUP_DIR="/home/ubuntu/backups"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+
+# Create backup directory
+mkdir -p $BACKUP_DIR
+
+# Step 1: Database backup
+echo "[1/8] Creating database backup..."
+sudo -u postgres pg_dump -Fc bmi_tracker > $BACKUP_DIR/bmi_tracker_$TIMESTAMP.dump
+echo "✓ Database backup created"
+
+# Step 2: Pull latest code
+echo "[2/8] Pulling latest code..."
+cd $PROJECT_DIR
+git fetch origin main
+git pull origin main
+echo "✓ Code updated"
+
+# Step 3: Update backend dependencies
+echo "[3/8] Installing backend dependencies..."
+cd $PROJECT_DIR/backend
+npm install --production
+echo "✓ Backend dependencies installed"
+
+# Step 4: Run database migrations
+echo "[4/8] Running database migrations..."
+for migration in migrations/*.sql; do
+    if [ -f "$migration" ]; then
+        echo "  Running $(basename $migration)..."
+        sudo -u postgres psql -d bmi_tracker -f "$migration" 2>&1 | grep -v "already exists" || true
+    fi
+done
+echo "✓ Migrations completed"
+
+# Step 5: Reload backend (zero-downtime)
+echo "[5/8] Reloading backend..."
+pm2 reload bmi-backend --update-env
+sleep 3
+echo "✓ Backend reloaded"
+
+# Step 6: Update frontend dependencies
+echo "[6/8] Installing frontend dependencies..."
+cd $PROJECT_DIR/frontend
+npm install
+echo "✓ Frontend dependencies installed"
+
+# Step 7: Build frontend
+echo "[7/8] Building frontend..."
+npm run build
+echo "✓ Frontend built"
+
+# Step 8: Deploy frontend
+echo "[8/8] Deploying frontend..."
+sudo cp -r dist/* /var/www/bmi-tracker/
+sudo chown -R www-data:www-data /var/www/bmi-tracker
+sudo chmod -R 755 /var/www/bmi-tracker
+echo "✓ Frontend deployed"
+
+# Reload Nginx
+echo "Reloading Nginx..."
+sudo nginx -t && sudo systemctl reload nginx
+echo "✓ Nginx reloaded"
+
+# Verify deployment
+echo ""
+echo "========================================="
+echo "Verification"
+echo "========================================="
+
+# Check backend
+if pm2 status | grep -q "online"; then
+    echo "✓ Backend: Online"
+else
+    echo "✗ Backend: Error"
+fi
+
+# Check API
+if curl -s http://localhost:3000/health | grep -q "ok"; then
+    echo "✓ API Health Check: Passed"
+else
+    echo "✗ API Health Check: Failed"
+fi
+
+# Check frontend
+if [ -f "/var/www/bmi-tracker/index.html" ]; then
+    echo "✓ Frontend Files: Present"
+else
+    echo "✗ Frontend Files: Missing"
+fi
+
+echo ""
+echo "========================================="
+echo "Deployment completed: $(date)"
+echo "Backup location: $BACKUP_DIR"
+echo "========================================="
+EOF
+
+# Make script executable
+chmod +x /home/ubuntu/deploy.sh
+
+# Run deployment
+/home/ubuntu/deploy.sh
+```
+
+### 14.6 Rollback Procedure
+
+If an update causes issues:
+
+```bash
+# 1. Identify the issue
+pm2 logs bmi-backend --lines 100
+sudo tail -100 /var/log/nginx/error.log
+
+# 2. Rollback Backend Code
+cd /home/ubuntu/single-server-3tier-webapp/backend
+
+# Using Git
+git log --oneline -5
+git checkout <previous-commit-hash>
+npm install
+pm2 reload bmi-backend
+
+# Or restore from backup
+# cp -r /home/ubuntu/single-server-3tier-webapp/backend.backup.TIMESTAMP/* /home/ubuntu/single-server-3tier-webapp/backend/
+
+# 3. Rollback Database (if schema changed)
+# Restore from backup
+sudo -u postgres psql -c "DROP DATABASE bmi_tracker;"
+sudo -u postgres psql -c "CREATE DATABASE bmi_tracker OWNER bmi_user;"
+sudo -u postgres pg_restore -d bmi_tracker /var/backups/postgresql/bmi_tracker_TIMESTAMP.dump
+
+# 4. Rollback Frontend
+sudo cp -r /var/www/bmi-tracker.backup.TIMESTAMP/* /var/www/bmi-tracker/
+sudo systemctl reload nginx
+
+# 5. Verify rollback
+curl http://localhost:3000/health
+curl http://localhost/
+pm2 logs bmi-backend
+```
+
+### 14.7 Update Monitoring & Health Checks
+
+```bash
+# Create health check script
+cat > /home/ubuntu/health_check.sh << 'EOF'
+#!/bin/bash
+
+echo "========================================="
+echo "Application Health Check - $(date)"
+echo "========================================="
+
+# Check PM2 status
+echo ""
+echo "1. Backend Process (PM2):"
+if pm2 status | grep -q "bmi-backend.*online"; then
+    echo "   ✓ Backend is running"
+else
+    echo "   ✗ Backend is not running"
+fi
+
+# Check API health
+echo ""
+echo "2. API Health Endpoint:"
+HEALTH_RESPONSE=$(curl -s http://localhost:3000/health)
+if echo $HEALTH_RESPONSE | grep -q "ok"; then
+    echo "   ✓ API responding: $HEALTH_RESPONSE"
+else
+    echo "   ✗ API not responding properly"
+fi
+
+# Check database connection
+echo ""
+echo "3. Database Connection:"
+if sudo -u postgres psql -d bmi_tracker -c "SELECT 1;" > /dev/null 2>&1; then
+    echo "   ✓ Database accessible"
+else
+    echo "   ✗ Database connection failed"
+fi
+
+# Check Nginx
+echo ""
+echo "4. Nginx Status:"
+if sudo systemctl is-active --quiet nginx; then
+    echo "   ✓ Nginx is running"
+else
+    echo "   ✗ Nginx is not running"
+fi
+
+# Check frontend files
+echo ""
+echo "5. Frontend Deployment:"
+if [ -f "/var/www/bmi-tracker/index.html" ]; then
+    echo "   ✓ Frontend files present"
+else
+    echo "   ✗ Frontend files missing"
+fi
+
+# Check disk space
+echo ""
+echo "6. Disk Space:"
+df -h / | awk 'NR==2 {print "   Used: "$3" / Available: "$4" ("$5" full)"}'
+
+echo ""
+echo "========================================="
+EOF
+
+chmod +x /home/ubuntu/health_check.sh
+
+# Run health check
+/home/ubuntu/health_check.sh
+```
+
+### 14.8 Automated Update with GitHub Webhooks (Optional)
+
+For automatic deployments when you push to GitHub:
+
+```bash
+# Install webhook listener
+npm install -g webhook
+
+# Create webhook configuration
+cat > /home/ubuntu/webhook-config.json << 'EOF'
+[
+  {
+    "id": "deploy-bmi-tracker",
+    "execute-command": "/home/ubuntu/deploy.sh",
+    "command-working-directory": "/home/ubuntu/single-server-3tier-webapp",
+    "pass-arguments-to-command": [],
+    "trigger-rule": {
+      "match": {
+        "type": "payload-hash-sha1",
+        "secret": "YOUR_WEBHOOK_SECRET",
+        "parameter": {
+          "source": "header",
+          "name": "X-Hub-Signature"
+        }
+      }
+    }
+  }
+]
+EOF
+
+# Create webhook service
+sudo nano /etc/systemd/system/webhook.service
+
+# Add:
+[Unit]
+Description=Webhook Service
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu
+ExecStart=/usr/local/bin/webhook -hooks /home/ubuntu/webhook-config.json -port 9000
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+
+# Enable and start webhook service
+sudo systemctl daemon-reload
+sudo systemctl enable webhook
+sudo systemctl start webhook
+
+# Add webhook port to firewall
+sudo ufw allow 9000/tcp
+
+# Configure in GitHub:
+# Repository → Settings → Webhooks → Add webhook
+# Payload URL: http://YOUR_EC2_IP:9000/hooks/deploy-bmi-tracker
+# Content type: application/json
+# Secret: YOUR_WEBHOOK_SECRET
+# Events: Just the push event
+```
+
+### 14.9 Scheduled Maintenance Tasks
+
+```bash
+# Add to crontab for automated maintenance
+crontab -e
+
+# Daily database backup at 2 AM
+0 2 * * * /usr/local/bin/backup_bmi_db.sh >> /var/log/postgresql/backup.log 2>&1
+
+# Weekly log rotation (Sunday 3 AM)
+0 3 * * 0 pm2 flush
+
+# Weekly health check report (Monday 9 AM)
+0 9 * * 1 /home/ubuntu/health_check.sh | mail -s "BMI Tracker Health Report" admin@example.com
+
+# Monthly server updates (1st day, 4 AM)
+0 4 1 * * sudo apt update && sudo apt upgrade -y && sudo systemctl reboot
+```
+
+### 14.10 Update Best Practices
+
+**DO:**
+- ✓ Always create backups before updates
+- ✓ Test updates in development first
+- ✓ Use `pm2 reload` instead of `pm2 restart` (zero-downtime)
+- ✓ Monitor logs after deployment
+- ✓ Keep dependencies updated regularly
+- ✓ Document changes and version numbers
+- ✓ Use Git tags for production releases
+
+**DON'T:**
+- ✗ Update directly on production without testing
+- ✗ Skip database backups
+- ✗ Use `pm2 delete` and `pm2 start` (causes downtime)
+- ✗ Forget to run migrations
+- ✗ Leave old backup files accumulating
+- ✗ Update during peak traffic hours
+
+### 14.11 Quick Update Commands Reference
+
+```bash
+# Quick backend update
+cd /home/ubuntu/single-server-3tier-webapp/backend && git pull && npm install && pm2 reload bmi-backend
+
+# Quick frontend update
+cd /home/ubuntu/single-server-3tier-webapp/frontend && git pull && npm install && npm run build && sudo cp -r dist/* /var/www/bmi-tracker/
+
+# Check application version
+cd /home/ubuntu/single-server-3tier-webapp && git log -1 --oneline
+
+# View recent changes
+cd /home/ubuntu/single-server-3tier-webapp && git log -5 --oneline
+
+# Restart everything safely
+pm2 reload bmi-backend && sudo systemctl reload nginx
+
+# Full restart (if needed)
+pm2 restart bmi-backend && sudo systemctl restart nginx && sudo systemctl restart postgresql
+```
 
 ---
 
@@ -1015,3 +1569,4 @@ psql -U bmi_user -d bmidb -h localhost
 **Last Updated**: December 16, 2025  
 **Version**: 2.1  
 **Changes**: Updated to include measurement_date feature (Migration 002), enhanced testing procedures, and current project state
+
