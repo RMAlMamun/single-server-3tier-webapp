@@ -785,7 +785,7 @@ sudo systemctl reload nginx
 4. **Connection Tab:**
    - Host: `localhost` (or `127.0.0.1`)
    - Port: `5432`
-   - Maintenance database: `bmi_tracker`
+   - Maintenance database: `bmidb`
    - Username: `bmi_user`
    - Password: `your_password`
    - Save password: ✓ (checked)
