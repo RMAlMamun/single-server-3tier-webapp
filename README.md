@@ -2,6 +2,8 @@
 
 A production-ready, full-stack three-tier web application for tracking Body Mass Index (BMI), Basal Metabolic Rate (BMR), and daily calorie requirements with trend visualization. Built with modern web technologies and deployed on AWS EC2.
 
+Live Link: http://34.200.227.112/
+
 ## 📋 Table of Contents
 
 - [Overview](#overview)
